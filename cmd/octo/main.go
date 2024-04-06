@@ -1,8 +1,6 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -12,38 +10,39 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/rs/zerolog/pkgerrors"
+	"github.com/urfave/cli/v2"
 )
 
-var banner = `         _                           
- ___ ___| |_ ___ ___ ___ ___ _ _ _ _ 
-| . |  _|  _| . | . |  _| . |_'_| | |
-|___|___|_| |___|  _|_| |___|_,_|_  |
-                |_|             |___| v%s
+// var banner = `         _
+//  ___ ___| |_ ___ ___ ___ ___ _ _ _ _
+// | . |  _|  _| . | . |  _| . |_'_| | |
+// |___|___|_| |___|  _|_| |___|_,_|_  |
+//                 |_|             |___| v%s
 
-`
-var usage = `Usage of octo:
-octo [flag] arguments...
+// `
+// var usage = `Usage of octo:
+// octo [flag] arguments...
 
-Flags:
-  -config
-    Specify config location path (default: ./config.yaml)
-  -listener
-    Specify listener for running octo-proxy (default: 0.0.0.0:5000)
-  -target
-    Specify target backend which traffic will be forwarded
-  -metrics
-    Specify address and port to run the metrics server
-  -debug
-    Enable debug log messages
-  -version
-    Print octo-proxy version
+// Flags:
+//   -config
+//     Specify config location path (default: ./config.yaml)
+//   -listener
+//     Specify listener for running octo-proxy (default: 1.0.0.0:5000)
+//   -target
+//     Specify target backend which traffic will be forwarded
+//   -metrics
+//     Specify address and port to run the metrics server
+//   -debug
+//     Enable debug log messages
+//   -version
+//     Print octo-proxy version
 
-`
+// `
 
-var (
-	Version    = "x.X"
-	showBanner = fmt.Sprintf(banner, Version)
-)
+// var (
+// 	Version = "x.X"
+// 	showBanner = fmt.Sprintf(banner, Version)
+// )
 
 func main() {
 	if err := runMain(); err != nil {
@@ -71,55 +70,82 @@ func setupLogger(debug bool) {
 }
 
 func runMain() error {
-	var (
-		configPath = flag.String("config", "config.yaml", "Specify config location path")
-		ver        = flag.Bool("version", false, "Print octo-proxy version")
-		listener   = flag.String("listener", "127.0.0.1:5000", "Specify listener for running octo-proxy")
-		target     = flag.String("target", "", "Specify comma-separated list of targets for running octo-proxy")
-		metrics    = flag.String("metrics", "0.0.0.0:9123", "Address and port to run the metrics server on")
-		debug      = flag.Bool("debug", false, "Enable debug messages")
-	)
+	app := &cli.App{
+		Name:                 "tcp-proxy",
+		Usage:                "for tcp port proxy",
+		EnableBashCompletion: true,
+		Version:              "v0.0.1",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "listener",
+				Value:   "127.0.0.1:8050",
+				Aliases: []string{"l"},
+				Usage:   "local ip:port to use for listen",
+			},
+			&cli.StringFlag{
+				Name:    "target",
+				Value:   "",
+				Aliases: []string{"t"},
+				Usage:   `remote target ip:port to proxy, mutil use,"192.168.1.15:9090,192.168.1.15:9091"`,
+			},
+			&cli.StringFlag{
+				Name:    "metrics",
+				Value:   "0.0.0.0:9123",
+				Aliases: []string{"m"},
+				Usage:   "run metrics on this ip:port",
+			},
+			&cli.StringFlag{
+				Name:    "config",
+				Value:   "config.yaml",
+				Aliases: []string{"c"},
+				Usage:   "config file path, if -target set, this will not used",
+			},
+			&cli.BoolFlag{
+				Name:  "debug",
+				Value: false,
+				Usage: "enable debug log",
+			},
+		},
+		Action: func(c *cli.Context) error {
 
-	flag.Usage = func() {
-		fmt.Fprint(flag.CommandLine.Output(), showBanner, usage)
+			listenerC := c.String("listener")
+			targetC := c.String("target")
+			configPathC := c.String("config")
+			metricsC := c.String("metrics")
+			debugC := c.Bool("debug")
+
+			setupLogger(debugC)
+
+			// use target first
+			if targetC != "" {
+				targets := strings.Split(targetC, ",")
+				c, err := config.GenerateConfig(listenerC, targets, metricsC)
+				if err != nil {
+					return err
+				}
+
+				if err := runner.Run(c, ""); err != nil {
+					return err
+				}
+
+				return nil
+			} else {
+				// use config file secondly
+				cfg, err := config.New(configPathC)
+				if err != nil {
+					return err
+				}
+
+				err = runner.Run(cfg, configPathC)
+				if err != nil {
+					return err
+				}
+
+			}
+
+			return nil
+		},
 	}
-	flag.Parse()
 
-	fmt.Fprintf(os.Stdout, showBanner)
-
-	setupLogger(*debug)
-
-	// run with flag
-	if *target != "" {
-		targets := strings.Split(*target, ",")
-
-		c, err := config.GenerateConfig(*listener, targets, *metrics)
-		if err != nil {
-			return err
-		}
-
-		if err := runner.Run(c, ""); err != nil {
-			return err
-		}
-
-		return nil
-	}
-
-	if *ver {
-		fmt.Printf("octo-proxy version v%s\n", Version)
-		return nil
-	}
-
-	// running with configuration, first read configuration and then
-	// run the runner
-	c, err := config.New(*configPath)
-	if err != nil {
-		return err
-	}
-
-	if err := runner.Run(c, *configPath); err != nil {
-		return err
-	}
-
-	return nil
+	return app.Run(os.Args)
 }
